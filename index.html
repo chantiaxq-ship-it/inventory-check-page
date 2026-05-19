@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>每日库存检查 · 操作手册</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f5f0;
+      --surface: #ffffff;
+      --border: #e8e8e4;
+      --text: #1a1a1a;
+      --muted: #6b6b6b;
+      --accent: #2563eb;
+      --coming-soon-bg: #fef3c7;
+      --coming-soon-text: #92400e;
+      --preorder-bg: #dbeafe;
+      --preorder-text: #1e40af;
+      --instock-bg: #d1fae5;
+      --instock-text: #065f46;
+      --step-line: #e8e8e4;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .page {
+      max-width: 680px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      margin-bottom: 2.5rem;
+    }
+    .label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-top: 0.4rem;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .card-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+
+    /* Brand tags */
+    .brands {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .brand-tag {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .brand-note {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.85rem;
+    }
+
+    /* Steps */
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .step {
+      display: flex;
+      gap: 1rem;
+      position: relative;
+    }
+    .step:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      left: 15px;
+      top: 32px;
+      bottom: 0;
+      width: 1px;
+      background: var(--step-line);
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--muted);
+      z-index: 1;
+    }
+    .step-body {
+      padding-bottom: 1.5rem;
+      flex: 1;
+    }
+    .step:last-child .step-body {
+      padding-bottom: 0;
+    }
+    .step-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding-top: 0.4rem;
+      margin-bottom: 0.3rem;
+    }
+    .step-desc {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .step-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.82rem;
+      word-break: break-all;
+    }
+    .step-link:hover { text-decoration: underline; }
+
+    /* Status cards */
+    .statuses {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .status-card {
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+    }
+    .status-card.coming-soon {
+      background: var(--coming-soon-bg);
+      border: 1px solid #fde68a;
+    }
+    .status-card.preorder {
+      background: var(--preorder-bg);
+      border: 1px solid #bfdbfe;
+    }
+    .status-card.instock {
+      background: var(--instock-bg);
+      border: 1px solid #a7f3d0;
+    }
+    .status-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      margin-bottom: 0.55rem;
+    }
+    .coming-soon .status-badge { color: var(--coming-soon-text); background: #fcd34d44; }
+    .preorder   .status-badge { color: var(--preorder-text);    background: #93c5fd44; }
+    .instock    .status-badge { color: var(--instock-text);     background: #6ee7b744; }
+
+    .status-action {
+      font-size: 0.85rem;
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .status-action ul {
+      padding-left: 1.1rem;
+      margin-top: 0.25rem;
+    }
+    .status-action li { margin-bottom: 0.15rem; }
+
+    /* Footer */
+    footer {
+      margin-top: 2.5rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header>
+      <div class="label">Skill · 操作手册</div>
+      <h1>每日库存检查</h1>
+      <p class="subtitle">检查负责品牌的库存状态并按规则处理</p>
+    </header>
+
+    <!-- 品牌 -->
+    <div class="card">
+      <div class="card-title">负责品牌</div>
+      <div class="brands">
+        <span class="brand-tag">APC Toys</span>
+        <span class="brand-tag">Gear Factory</span>
+        <span class="brand-tag">Iron Factory</span>
+      </div>
+      <p class="brand-note">如需增减品牌，修改 <code>skills/库存检查.md</code> 顶部列表即可。</p>
+    </div>
+
+    <!-- 操作步骤 -->
+    <div class="card">
+      <div class="card-title">操作流程</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <div class="step-title">打开后台产品列表</div>
+            <a class="step-link" href="https://showzstore.com/manage/" target="_blank" rel="noopener">
+              showzstore.com/manage/
+            </a>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <div class="step-title">只检查第一页</div>
+            <div class="step-desc">找到品名包含以上品牌名称的产品。每天检查不会堆积到下一页。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <div class="step-title">根据产品状态处理</div>
+            <div class="step-desc">见下方状态处理规则。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态处理 -->
+    <div class="card">
+      <div class="card-title">状态处理规则</div>
+      <div class="statuses">
+
+        <div class="status-card coming-soon">
+          <div class="status-badge">Coming Soon</div>
+          <div class="status-action">
+            提醒：「[产品名] 是 Coming Soon 状态，请去易仓检查是否有库存，决定是否加可售数量」
+          </div>
+        </div>
+
+        <div class="status-card preorder">
+          <div class="status-badge">Pre-Order</div>
+          <div class="status-action">
+            <ul>
+              <li>点右侧「修改」按钮进入产品页</li>
+              <li>在「总库存」字段 +20</li>
+              <li>保存</li>
+              <li>完成后通知：「[产品名] 是 Pre-Order 状态，已加20库存」</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="status-card instock">
+          <div class="status-badge">In Stock（库存为 0）</div>
+          <div class="status-action">
+            打开右侧「销售检查」开关
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer>每日库存检查 · 最后修订于 2026-05-19</footer>
+
+  </div>
+</body>
+</html>
