@@ -1,3 +1,4 @@
 @echo off
-cd /d "C:\Users\XuQian\秘书"
+pushd "%~dp0"
 python inventory_check.py >> inventory_check.log 2>&1
+popd
