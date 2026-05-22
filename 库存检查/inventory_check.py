@@ -453,16 +453,17 @@ async def main():
     if zero_stock:
         zero_lines = "\n".join(zero_stock)
     else:
-        zero_lines = "（无需关注的产品）"
+        zero_lines = "无需关注的产品"
 
     if modified:
-        change_lines = "\n".join(f"- {m}" for m in modified)
+        change_lines = "\n".join(modified)
     else:
         change_lines = "今日无改动"
 
     report = (
-        f"📦 需要关注的产品（库存=0且销售检查未开启）：\n{zero_lines}\n\n"
-        f"🔧 今日改动：\n{change_lines}"
+        f"⚠️ 库存为0且未开销售检查的产品：\n{zero_lines}\n\n"
+        f"🔧 今日改动：\n{change_lines}\n\n"
+        f"📊 共扫描 {total_scanned} 个产品"
     )
 
     send_telegram(report)
