@@ -218,7 +218,6 @@ async def edit_stock(page, href: str, new_stock: int, sku: str, back_url: str) -
             pass
         return False
 
-    await inp.triple_click()
     await inp.fill(str(new_stock))
 
     clicked = await page.evaluate(r"""
