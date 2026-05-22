@@ -1,4 +1,6 @@
 @echo off
+chcp 65001 > nul
 pushd "%~dp0"
-python inventory_check.py >> inventory_check.log 2>&1
+python inventory_check.py
+pause
 popd
