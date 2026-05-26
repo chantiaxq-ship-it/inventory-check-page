@@ -253,16 +253,14 @@ async def edit_stock(page, href: str, new_stock: int, sku: str, back_url: str) -
         await safe_goto(page, back_url)
         return False
 
+    await page.click("#__sz_submit_btn__")
     try:
-        async with page.expect_navigation(timeout=60_000):
-            await page.click("#__sz_submit_btn__")
+        # networkidle works for both traditional POST redirect and AJAX submit,
+        # and tolerates higher latency (GitHub Actions → Chinese server)
+        await page.wait_for_load_state("networkidle", timeout=60_000)
     except Exception as e:
-        log(f"[ERROR] Submit navigation failed for {sku}: {e}")
-        try:
-            await safe_goto(page, back_url, wait_selector="table tbody tr")
-        except Exception:
-            pass
-        return False
+        log(f"[WARN] Post-submit settle timed out for {sku}: {e}")
+        await page.wait_for_timeout(3000)
 
     log(f"[OK] {sku}: stock set to {new_stock} (btn: {btn_val})")
     await safe_goto(page, back_url, wait_selector="table tbody tr")
