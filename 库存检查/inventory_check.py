@@ -11,6 +11,7 @@ Notification: reports all products where stock == 0 at scan time.
 """
 
 import asyncio
+import os
 import re
 import traceback
 import requests
@@ -23,11 +24,17 @@ MANAGE_BASE = "https://showzstore.com/manage/"
 LOGIN_URL   = MANAGE_BASE + "?m=products&a=products"
 USERNAME    = "chantia@showz.store"
 PASSWORD    = "SS27650942"
-BRANDS      = ["APC Toys", "Iron Factory", "Gear Factory"]
+# Each entry: (display_name, [search_keyword, ...])
+# Iron Factory uses both "Iron Factory" and "IronFactory" in product names
+BRANDS = [
+    ("APC Toys",     ["APC Toys"]),
+    ("Iron Factory", ["Iron Factory", "IronFactory"]),
+    ("Gear Factory", ["Gear Factory"]),
+]
 EXCEL_PATH  = r"C:\Users\XuQian\Desktop\产品报数文档.xlsx"
 TG_TOKEN    = "8841015387:AAEJUhOZDKgHp84GZ0NwujqI-e-2Ao5Q71I"
 TG_CHAT_ID  = "8965386696"
-LOG_FILE    = r"C:\Users\XuQian\秘书\inventory_check.log"
+LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_check.log")
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -220,27 +227,35 @@ async def edit_stock(page, href: str, new_stock: int, sku: str, back_url: str) -
 
     await inp.fill(str(new_stock))
 
-    clicked = await page.evaluate(r"""
+    # Mark the target button with a known ID so we can click it via Playwright
+    # (JS .click() inside evaluate doesn't wait for the resulting navigation)
+    btn_val = await page.evaluate(r"""
         () => {
             const btns = [...document.querySelectorAll("input[name='submit_button'][type='submit']")];
             const preferred = btns.find(b => b.value.includes('前台'));
             const fallback  = btns.find(b => !b.value.includes('返回'));
             const btn = preferred || fallback;
-            if (btn) { btn.click(); return btn.value; }
+            if (btn) { btn.id = '__sz_submit_btn__'; return btn.value; }
             return null;
         }
     """)
-    if not clicked:
+    if not btn_val:
         log(f"[ERROR] Submit button not found for {sku}")
         await safe_goto(page, back_url)
         return False
 
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
-    except Exception:
-        log(f"[WARN] Submit response slow for {sku}, continuing anyway")
+        async with page.expect_navigation(timeout=60_000):
+            await page.click("#__sz_submit_btn__")
+    except Exception as e:
+        log(f"[ERROR] Submit navigation failed for {sku}: {e}")
+        try:
+            await safe_goto(page, back_url, wait_selector="table tbody tr")
+        except Exception:
+            pass
+        return False
 
-    log(f"[OK] {sku}: stock set to {new_stock} (btn: {clicked})")
+    log(f"[OK] {sku}: stock set to {new_stock} (btn: {btn_val})")
     await safe_goto(page, back_url, wait_selector="table tbody tr")
     return True
 
@@ -285,94 +300,104 @@ def product_status(name: str) -> str:
 
 
 async def process_brand(
-    page, brand: str, sku_qty: dict, zero_stock: list, modified: list
+    page, brand: str, keywords: list, sku_qty: dict, zero_stock: list, modified: list
 ) -> int:
-    """Process all pages for a brand. Returns number of products scanned."""
+    """Process all pages for a brand using one or more search keywords.
+
+    Multiple keywords are needed when the same brand uses different spellings in
+    product names (e.g. "Iron Factory" vs "IronFactory").  Results are deduplicated
+    by ProId so each product is processed exactly once.
+    Returns number of products scanned.
+    """
     log(f"─── Brand: {brand}")
-    page_no     = 1
     seen_proids: set = set()
     MAX_PAGES   = 30
     scanned     = 0
 
-    while page_no <= MAX_PAGES:
-        url = (
-            f"{MANAGE_BASE}?Keyword={quote(brand)}"
-            f"&CateId=&Other=0&m=products&a=products&page={page_no}"
-        )
-        await safe_goto(page, url, wait_selector="table tbody tr, td.dataTables_empty")
+    for keyword in keywords:
+        page_no = 1
+        kw_seen_proids: set = set()  # wrap-around detection per keyword
 
-        rows = await parse_product_rows(page)
-        if not rows:
-            # DataTables may still be loading — wait 5 s and retry once
-            await page.wait_for_timeout(5000)
+        while page_no <= MAX_PAGES:
+            url = (
+                f"{MANAGE_BASE}?Keyword={quote(keyword)}"
+                f"&CateId=&Other=0&m=products&a=products&page={page_no}"
+            )
+            await safe_goto(page, url, wait_selector="table tbody tr, td.dataTables_empty")
+
             rows = await parse_product_rows(page)
-        if not rows:
-            log(f"    Page {page_no}: no rows → done")
-            break
+            if not rows:
+                await page.wait_for_timeout(5000)
+                rows = await parse_product_rows(page)
+            if not rows:
+                log(f"    [{keyword}] Page {page_no}: no rows → done")
+                break
 
-        # Detect wrap-around: if every ProId on this page was already seen, the
-        # website is recycling results beyond its real last page — stop here.
-        page_proids = {p["proid"] for p in rows if p.get("proid")}
-        if page_proids and page_proids.issubset(seen_proids):
-            log(f"    Page {page_no}: all products already seen → done")
-            break
-        seen_proids.update(page_proids)
+            page_proids = {p["proid"] for p in rows if p.get("proid")}
+            if page_proids and page_proids.issubset(kw_seen_proids):
+                log(f"    [{keyword}] Page {page_no}: all products already seen → done")
+                break
+            kw_seen_proids.update(page_proids)
 
-        log(f"    Page {page_no}: {len(rows)} product(s)")
-        scanned += len(rows)
+            # Only process products not yet handled by a previous keyword pass
+            new_rows = [p for p in rows if p.get("proid") not in seen_proids]
+            seen_proids.update(page_proids)
 
-        for p in rows:
-            name, sku, stock = p["name"], p["sku"], p["stock"]
-            status        = product_status(name)
-            has_prefix    = bool(re.match(r'^\[', name.strip()))
-            is_preorder   = "[Pre-Order]" in name
-            is_comingsoon = "[Coming Soon]" in name
+            log(f"    [{keyword}] Page {page_no}: {len(rows)} product(s), {len(new_rows)} new")
+            scanned += len(new_rows)
 
-            if stock > 0:
-                continue
+            for p in new_rows:
+                name, sku, stock = p["name"], p["sku"], p["stock"]
+                status        = product_status(name)
+                has_prefix    = bool(re.match(r'^\[', name.strip()))
+                is_preorder   = "[Pre-Order]" in name
+                is_comingsoon = "[Coming Soon]" in name
 
-            if stock != 0:
-                continue  # -1 or unparseable → skip
-
-            # stock == 0 + sales-check OFF: record for notification
-            if not p["salesCheckOn"]:
-                zero_stock.append(f"[{status}] {sku}: 0件")
-
-            if not has_prefix:
-                # Rule 1: In Stock, 前台可售=0
-                if p["salesCheckOn"]:
-                    log(f"    In Stock stock=0 but sales-check already ON → skip: {sku}")
+                if stock > 0:
                     continue
-                log(f"    In Stock stock=0 → 销售检查: {sku}")
-                ok = await trigger_sales_check(page, p["proid"], sku)
-                if ok:
-                    modified.append(f"[{status}] {sku}：已开启销售检查")
 
-            else:
-                # Has prefix ([Pre-Order] or [Coming Soon])
-                if sku in sku_qty:
-                    # Rule 2: SKU in Excel
-                    qty = sku_qty[sku]
-                    if qty > 0:
-                        log(f"    {status} stock=0, Excel qty={qty} → set stock: {sku}")
-                        ok = await edit_stock(page, p["href"], qty, sku, url)
-                        if ok:
-                            modified.append(f"[{status}] {sku}：加库存{qty}")
-                    else:
-                        log(f"    SKU in Excel but qty=0 → skip: {sku}")
+                if stock != 0:
+                    continue  # -1 or unparseable → skip
 
-                elif is_preorder:
-                    # Rule 3: Pre-Order + not in Excel → set 20
-                    log(f"    Pre-Order stock=0, not in Excel → set 20: {sku}")
-                    ok = await edit_stock(page, p["href"], 20, sku, url)
+                # stock == 0 + sales-check OFF: record for notification
+                if not p["salesCheckOn"]:
+                    zero_stock.append(f"[{status}] {sku}: 0件")
+
+                if not has_prefix:
+                    # Rule 1: In Stock, 前台可售=0
+                    if p["salesCheckOn"]:
+                        log(f"    In Stock stock=0 but sales-check already ON → skip: {sku}")
+                        continue
+                    log(f"    In Stock stock=0 → 销售检查: {sku}")
+                    ok = await trigger_sales_check(page, p["proid"], sku)
                     if ok:
-                        modified.append(f"[{status}] {sku}：加库存20")
+                        modified.append(f"[{status}] {sku}：已开启销售检查")
 
-                elif is_comingsoon:
-                    # Rule 4: Coming Soon + not in Excel → skip
-                    log(f"    Coming Soon stock=0, not in Excel → skip: {sku}")
+                else:
+                    # Has prefix ([Pre-Order] or [Coming Soon])
+                    if sku in sku_qty:
+                        # Rule 2: SKU in Excel
+                        qty = sku_qty[sku]
+                        if qty > 0:
+                            log(f"    {status} stock=0, Excel qty={qty} → set stock: {sku}")
+                            ok = await edit_stock(page, p["href"], qty, sku, url)
+                            if ok:
+                                modified.append(f"[{status}] {sku}：加库存{qty}")
+                        else:
+                            log(f"    SKU in Excel but qty=0 → skip: {sku}")
 
-        page_no += 1
+                    elif is_preorder:
+                        # Rule 3: Pre-Order + not in Excel → set 20
+                        log(f"    Pre-Order stock=0, not in Excel → set 20: {sku}")
+                        ok = await edit_stock(page, p["href"], 20, sku, url)
+                        if ok:
+                            modified.append(f"[{status}] {sku}：加库存20")
+
+                    elif is_comingsoon:
+                        # Rule 4: Coming Soon + not in Excel → skip
+                        log(f"    Coming Soon stock=0, not in Excel → skip: {sku}")
+
+            page_no += 1
 
     return scanned
 
@@ -416,10 +441,10 @@ async def main():
                 pass
             return
 
-        for brand in BRANDS:
+        for brand, keywords in BRANDS:
             for attempt in range(2):
                 try:
-                    n = await process_brand(page, brand, sku_qty, zero_stock, modified)
+                    n = await process_brand(page, brand, keywords, sku_qty, zero_stock, modified)
                     total_scanned += n
                     break
                 except Exception as e:
