@@ -253,15 +253,36 @@ async def edit_stock(page, href: str, new_stock: int, sku: str, back_url: str) -
         await safe_goto(page, back_url)
         return False
 
-    await page.click("#__sz_submit_btn__")
+    # The CMS saves via jQuery $.post() AJAX — no page navigation occurs.
+    # Intercept the POST response and verify data.ret == 1 for real success.
     try:
-        # networkidle works for both traditional POST redirect and AJAX submit,
-        # and tolerates higher latency (GitHub Actions → Chinese server)
-        await page.wait_for_load_state("networkidle", timeout=60_000)
-    except Exception as e:
-        log(f"[WARN] Post-submit settle timed out for {sku}: {e}")
-        await page.wait_for_timeout(3000)
+        async with page.expect_response(
+            lambda r: r.request.method == "POST" and "manage" in r.url,
+            timeout=60_000
+        ) as resp_info:
+            await page.click("#__sz_submit_btn__")
 
+        resp = await resp_info.value
+        try:
+            result = await resp.json()
+            if result.get("ret") != 1:
+                log(f"[ERROR] {sku}: server rejected save: {result.get('msg', '')}")
+                try:
+                    await safe_goto(page, back_url, wait_selector="table tbody tr")
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            pass  # non-JSON response — treat as success
+    except Exception as e:
+        log(f"[ERROR] Submit AJAX failed for {sku}: {e}")
+        try:
+            await safe_goto(page, back_url, wait_selector="table tbody tr")
+        except Exception:
+            pass
+        return False
+
+    await page.wait_for_timeout(500)
     log(f"[OK] {sku}: stock set to {new_stock} (btn: {btn_val})")
     await safe_goto(page, back_url, wait_selector="table tbody tr")
     return True
