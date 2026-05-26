@@ -3,7 +3,7 @@
 
 Rules (applied only when stock == 0):
   No prefix (In Stock)  -> trigger sales check if switch is OFF
-  Prefix + SKU in Excel -> set stock = Excel qty (skip if qty == 0)
+  Prefix + SKU in Sheet -> set stock = Sheet qty (skip if qty == 0)
   Prefix + not in Excel + [Pre-Order]   -> set stock = 20
   Prefix + not in Excel + [Coming Soon] -> skip
 
@@ -11,6 +11,8 @@ Notification: reports all products where stock == 0 at scan time.
 """
 
 import asyncio
+import csv
+import io
 import os
 import re
 import traceback
@@ -20,10 +22,12 @@ from urllib.parse import urljoin, quote
 from playwright.async_api import async_playwright
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-MANAGE_BASE = "https://showzstore.com/manage/"
-LOGIN_URL   = MANAGE_BASE + "?m=products&a=products"
-USERNAME    = "chantia@showz.store"
-PASSWORD    = "SS27650942"
+MANAGE_BASE    = "https://showzstore.com/manage/"
+LOGIN_URL      = MANAGE_BASE + "?m=products&a=products"
+USERNAME       = "chantia@showz.store"
+PASSWORD       = os.environ.get("SHOWZ_PASSWORD", "SS27650942")
+SPREADSHEET_ID = "1JJKAvZh-bE2JlICqhBY17gwMbPG19_FzSInjU2Q-Z5M"
+SHEET_NAMES    = ["APC Toys", "Iron Factory", "Gear Factory"]
 # Each entry: (display_name, [search_keyword, ...])
 # Iron Factory uses both "Iron Factory" and "IronFactory" in product names
 BRANDS = [
@@ -31,10 +35,9 @@ BRANDS = [
     ("Iron Factory", ["Iron Factory", "IronFactory"]),
     ("Gear Factory", ["Gear Factory"]),
 ]
-EXCEL_PATH  = r"C:\Users\XuQian\Desktop\产品报数文档.xlsx"
-TG_TOKEN    = "8841015387:AAEJUhOZDKgHp84GZ0NwujqI-e-2Ao5Q71I"
-TG_CHAT_ID  = "8965386696"
-LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_check.log")
+TG_TOKEN   = os.environ.get("TELEGRAM_TOKEN",   "8841015387:AAEJUhOZDKgHp84GZ0NwujqI-e-2Ao5Q71I")
+TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8965386696")
+LOG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_check.log")
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -91,43 +94,49 @@ def send_telegram(msg: str):
                 log("[INFO] All changes are recorded in inventory_check.log")
 
 
-# ── Excel reader ──────────────────────────────────────────────────────────────
+# ── Google Sheet reader ───────────────────────────────────────────────────────
 
-def read_sku_qty(path: str) -> dict:
-    """Return {SKU: 剩余可加库存} from all sheets of the Excel file."""
-    try:
-        import openpyxl
-        wb   = openpyxl.load_workbook(path, data_only=True)
-        data = {}
-        for ws in wb.worksheets:
-            rows = list(ws.iter_rows(values_only=True))
-            if not rows:
+def read_sku_qty(spreadsheet_id: str) -> dict:
+    """Fetch {SKU: 剩余可加库存} from all sheets of a public Google Spreadsheet."""
+    proxies = _get_win_proxy()
+    data = {}
+    for sheet in SHEET_NAMES:
+        url = (
+            f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+            f"/gviz/tq?tqx=out:csv&sheet={quote(sheet)}"
+        )
+        try:
+            resp = requests.get(url, timeout=30, proxies=proxies or {})
+            resp.raise_for_status()
+        except Exception as e:
+            log(f"[WARN] Sheet '{sheet}' fetch failed: {e}")
+            continue
+
+        rows = list(csv.reader(io.StringIO(resp.text)))
+        if not rows:
+            continue
+        header = [str(c).strip() for c in rows[0]]
+        sku_i = next(
+            (i for i, h in enumerate(header) if re.search(r"SKU|编号|型号", h, re.I)),
+            None,
+        )
+        qty_i = next(
+            (i for i, h in enumerate(header) if "剩余可加库存" in h or "可加库存" in h),
+            None,
+        )
+        if sku_i is None or qty_i is None:
+            log(f"[WARN] Sheet '{sheet}': SKU or 剩余可加库存 column not found")
+            continue
+        for row in rows[1:]:
+            sku = str(row[sku_i]).strip() if sku_i < len(row) and row[sku_i] else ""
+            if not sku or sku.lower() == "none":
                 continue
-            header = [str(c).strip() if c else "" for c in rows[0]]
-            sku_i = next(
-                (i for i, h in enumerate(header) if re.search(r"SKU|编号|型号", h, re.I)),
-                None,
-            )
-            qty_i = next(
-                (i for i, h in enumerate(header) if "剩余可加库存" in h or "可加库存" in h),
-                None,
-            )
-            if sku_i is None or qty_i is None:
-                log(f"[WARN] Sheet '{ws.title}': SKU or 剩余可加库存 column not found")
-                continue
-            for row in rows[1:]:
-                sku = str(row[sku_i]).strip() if sku_i < len(row) and row[sku_i] else ""
-                if not sku or sku.lower() == "none":
-                    continue
-                try:
-                    data[sku] = int(float(row[qty_i] or 0))
-                except (ValueError, TypeError):
-                    data[sku] = 0
-        log(f"Excel loaded: {len(data)} SKU(s) — {list(data.items())[:5]}")
-        return data
-    except Exception as e:
-        log(f"[WARN] Excel read error: {e}")
-        return {}
+            try:
+                data[sku] = int(float(row[qty_i] or 0))
+            except (ValueError, TypeError):
+                data[sku] = 0
+    log(f"Google Sheet loaded: {len(data)} SKU(s) — {list(data.items())[:5]}")
+    return data
 
 
 # ── Browser helpers ────────────────────────────────────────────────────────────
@@ -405,7 +414,10 @@ async def process_brand(
 # ── Browser lifecycle ─────────────────────────────────────────────────────────
 
 async def _new_page(pw, win_proxy):
-    kwargs: dict = {"headless": True}
+    kwargs: dict = {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+    }
     if win_proxy:
         kwargs["proxy"] = {"server": win_proxy["https"]}
     browser = await pw.chromium.launch(**kwargs)
@@ -420,7 +432,7 @@ async def main():
     log("=" * 60)
     log("Inventory check started")
 
-    sku_qty        = read_sku_qty(EXCEL_PATH)
+    sku_qty        = read_sku_qty(SPREADSHEET_ID)
     zero_stock: list = []
     modified:   list = []
     total_scanned    = 0
