@@ -234,56 +234,63 @@ async def edit_stock(page, href: str, new_stock: int, sku: str, back_url: str) -
             pass
         return False
 
-    await inp.fill(str(new_stock))
-
-    # Mark the target button with a known ID so we can click it via Playwright
-    # (JS .click() inside evaluate doesn't wait for the resulting navigation)
-    btn_val = await page.evaluate(r"""
-        () => {
-            const btns = [...document.querySelectorAll("input[name='submit_button'][type='submit']")];
-            const preferred = btns.find(b => b.value.includes('前台'));
-            const fallback  = btns.find(b => !b.value.includes('返回'));
-            const btn = preferred || fallback;
-            if (btn) { btn.id = '__sz_submit_btn__'; return btn.value; }
-            return null;
-        }
-    """)
-    if not btn_val:
-        log(f"[ERROR] Submit button not found for {sku}")
-        await safe_goto(page, back_url)
-        return False
-
-    # The CMS saves via jQuery $.post() AJAX — no page navigation occurs.
-    # Intercept the POST response and verify data.ret == 1 for real success.
+    # Call jQuery $.post() directly so we get the real AJAX response — no navigation occurs.
+    # The CMS handler does: $('#is_update').val(btn.data-type); $.post('?', form.serialize(), cb, 'json')
     try:
-        async with page.expect_response(
-            lambda r: r.request.method == "POST" and "manage" in r.url,
-            timeout=60_000
-        ) as resp_info:
-            await page.click("#__sz_submit_btn__")
-
-        resp = await resp_info.value
-        try:
-            result = await resp.json()
-            if result.get("ret") != 1:
-                log(f"[ERROR] {sku}: server rejected save: {result.get('msg', '')}")
-                try:
-                    await safe_goto(page, back_url, wait_selector="table tbody tr")
-                except Exception:
-                    pass
-                return False
-        except Exception:
-            pass  # non-JSON response — treat as success
+        result = await page.evaluate("""
+            async (newStock) => {
+                const form = $('#edit_form');
+                if (!form.length) return {ret: 0, msg: 'edit_form not found'};
+                const btns = [...form.find('input[name="submit_button"][type="submit"]')];
+                const btn = btns.find(b => b.value.includes('\\u524d\\u53f0'))
+                         || btns.find(b => !b.value.includes('\\u8fd4\\u56de'));
+                if (!btn) return {ret: 0, msg: 'no submit button'};
+                form.find('input[name="Stock"]').val(newStock);
+                form.find('#is_update').val(parseInt(btn.getAttribute('data-type') || '0'));
+                return new Promise((resolve) => {
+                    $.post('?', form.serialize(), (data) => resolve(data), 'json')
+                     .fail((xhr) => resolve({ret: 0, msg: 'HTTP ' + xhr.status}));
+                });
+            }
+        """, new_stock)
     except Exception as e:
-        log(f"[ERROR] Submit AJAX failed for {sku}: {e}")
+        log(f"[ERROR] {sku}: evaluate/AJAX exception: {e}")
         try:
             await safe_goto(page, back_url, wait_selector="table tbody tr")
         except Exception:
             pass
         return False
 
-    await page.wait_for_timeout(500)
-    log(f"[OK] {sku}: stock set to {new_stock} (btn: {btn_val})")
+    if not isinstance(result, dict) or result.get("ret") != 1:
+        log(f"[ERROR] {sku}: save rejected by server — response: {result}")
+        try:
+            await safe_goto(page, back_url, wait_selector="table tbody tr")
+        except Exception:
+            pass
+        return False
+
+    # Post-save verification: reload edit page and confirm Stock value matches
+    await page.wait_for_timeout(1000)
+    try:
+        await safe_goto(page, full_url, wait_selector="a[data-name='sales_info']")
+        verify_tab = await page.query_selector("a[data-name='sales_info']")
+        if verify_tab:
+            await verify_tab.click()
+        await page.wait_for_selector("input[name='Stock']", state="visible", timeout=15_000)
+        actual = await page.evaluate(
+            "() => parseInt(document.querySelector('input[name=\"Stock\"]').value || '-1')"
+        )
+        if actual != new_stock:
+            log(f"[ERROR] {sku}: verification failed — server returned ret=1 but Stock={actual}, expected {new_stock}")
+            try:
+                await safe_goto(page, back_url, wait_selector="table tbody tr")
+            except Exception:
+                pass
+            return False
+    except Exception as e:
+        log(f"[WARN] {sku}: post-save verify error (ret=1 accepted anyway): {e}")
+
+    log(f"[OK] {sku}: stock set to {new_stock} (verified)")
     await safe_goto(page, back_url, wait_selector="table tbody tr")
     return True
 
