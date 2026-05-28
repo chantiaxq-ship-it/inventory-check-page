@@ -2,10 +2,7 @@ name: Inventory Check
 
 on:
   schedule:
-    - cron: '0 1 * * *'    # 北京 09:00
-    - cron: '0 6 * * *'    # 北京 14:00
-    - cron: '0 12 * * *'   # 北京 20:00
-    - cron: '0 19 * * *'   # 北京 03:00（次日）
+    - cron: '0 */2 * * *'  # 每隔2小时运行一次
   workflow_dispatch:       # Manual trigger for testing
 
 env:
