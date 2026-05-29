@@ -1,9 +1,7 @@
 name: Inventory Check
 
 on:
-  schedule:
-    - cron: '0 */2 * * *'  # 每隔2小时运行一次
-  workflow_dispatch:       # Manual trigger for testing
+  workflow_dispatch:       # 由 cron-job.org 每2小时调用 GitHub API 触发
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
