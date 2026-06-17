@@ -2,7 +2,7 @@
 
 自动登录 ShowZ Store 管理后台，扫描 APC Toys / Iron Factory / Gear Factory 三个品牌的所有产品，对库存为 0 的产品按规则补库存或开启销售检查，并通过 Telegram Bot 发送汇报。
 
-每天定时运行两次（09:00 / 14:00），无需人工干预。
+每天定时运行五次（03:00 / 09:00 / 12:00 / 17:00 / 22:00），由本机 Windows 任务计划程序触发，无需人工干预。
 
 ---
 
@@ -79,18 +79,16 @@ python inventory_check.py
 
 ## 设置 Windows 定时任务
 
-以下命令以**管理员身份**在 PowerShell 中运行，分别创建 09:00 和 14:00 两个任务：
+以下命令以**管理员身份**在 PowerShell 中运行，创建每天 5 个触发时间的任务（03:00 / 09:00 / 12:00 / 17:00 / 22:00）：
 
 ```powershell
-# 09:00 任务
-$action = New-ScheduledTaskAction -Execute "C:\Users\XuQian\秘书\库存检查\run_inventory_check.bat"
-$trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
-Register-ScheduledTask -TaskName "ShowZ_InventoryCheck_0900" -Action $action -Trigger $trigger -RunLevel Highest -Force
-
-# 14:00 任务
-$action2 = New-ScheduledTaskAction -Execute "C:\Users\XuQian\秘书\库存检查\run_inventory_check.bat"
-$trigger2 = New-ScheduledTaskTrigger -Daily -At "14:00"
-Register-ScheduledTask -TaskName "ShowZ_InventoryCheck_1400" -Action $action2 -Trigger $trigger2 -RunLevel Highest -Force
+$bat = "C:\Users\XuQian\秘书\库存检查\run_inventory_check.bat"
+foreach ($t in "03:00","09:00","12:00","17:00","22:00") {
+    $action  = New-ScheduledTaskAction -Execute $bat
+    $trigger = New-ScheduledTaskTrigger -Daily -At $t
+    $name    = "ShowZ_InventoryCheck_" + ($t -replace ':','')
+    Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -RunLevel Highest -Force
+}
 ```
 
 创建后可在「任务计划程序」中验证，或手动右键→「运行」测试。

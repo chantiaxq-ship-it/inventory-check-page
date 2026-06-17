@@ -513,15 +513,18 @@ async def main():
             pass
 
     # ── Build notification ─────────────────────────────────────────────────────
+    # Only notify when at least one change was actually made this run.
+    if not modified:
+        log(f"Done. 共扫描 {total_scanned} 个产品. {len(zero_stock)} 件库存为0, 无改动 → 不发送通知.")
+        log("=" * 60)
+        return
+
     if zero_stock:
         zero_lines = "\n".join(zero_stock)
     else:
         zero_lines = "无需关注的产品"
 
-    if modified:
-        change_lines = "\n".join(modified)
-    else:
-        change_lines = "今日无改动"
+    change_lines = "\n".join(modified)
 
     report = (
         f"⚠️ 库存为0且未开销售检查的产品：\n{zero_lines}\n\n"
